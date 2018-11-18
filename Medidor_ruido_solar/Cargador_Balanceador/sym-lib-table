@@ -1,0 +1,3 @@
+(sym_lib_table
+  (lib (name Cargador_Balanceador-rescue)(type Legacy)(uri ${KIPRJMOD}/Cargador_Balanceador-rescue.lib)(options "")(descr ""))
+)
