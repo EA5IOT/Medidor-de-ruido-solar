@@ -397,7 +397,7 @@ void IniciarContadores(void)
 {
   Timer4.setChannel1Mode(TIMER_OUTPUTCOMPARE);
   Timer4.pause();
-  Timer4.setPeriod(20000);                                                                                   // Se llama a la rutina de la interrupción cada 20000 microsegundos = 50 veces por segundo
+  Timer4.setPeriod(20000);                                                                                  // Se llama a la rutina de la interrupción cada 20000 microsegundos = 50 veces por segundo
   Timer4.setCompare1(1);
   Timer4.attachCompare1Interrupt(LeerValor);
   //Timer4.resume();
