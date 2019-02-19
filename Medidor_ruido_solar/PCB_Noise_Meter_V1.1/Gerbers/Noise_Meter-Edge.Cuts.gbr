@@ -1,16 +1,18 @@
+G04 #@! TF.GenerationSoftware,KiCad,Pcbnew,(5.0.1)-4*
+G04 #@! TF.CreationDate,2019-02-12T09:30:25+01:00*
+G04 #@! TF.ProjectId,Noise_Meter,4E6F6973655F4D657465722E6B696361,rev?*
+G04 #@! TF.SameCoordinates,Original*
 G04 #@! TF.FileFunction,Profile,NP*
 %FSLAX46Y46*%
 G04 Gerber Fmt 4.6, Leading zero omitted, Abs format (unit mm)*
-G04 Created by KiCad (PCBNEW 4.0.7) date 09/10/18 20:42:41*
+G04 Created by KiCad (PCBNEW (5.0.1)-4) date 12/02/2019 9:30:25*
 %MOMM*%
 %LPD*%
 G01*
 G04 APERTURE LIST*
-%ADD10C,0.100000*%
-%ADD11C,0.150000*%
+%ADD10C,0.150000*%
 G04 APERTURE END LIST*
 D10*
-D11*
 X195681600Y-135737600D02*
 X195681600Y-62992000D01*
 X105156000Y-135737600D02*
