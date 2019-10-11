@@ -1,5 +1,5 @@
-/*  EA5IOT Medidor de rudio solar V1.7
-    Copyright (C) 2018  EA5IOT
+/*  EA5IOT Medidor de rudio solar V2.0
+    Copyright (C) 2019  EA5IOT
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -45,17 +45,18 @@ int X_ant = 0;
 int X_punta = 0;
 int Memoria[128];
 
-const int DB_Espaciado = 2;                                                                                 // Espaciado entre puntos de calibracion
-const int DBm_Maximo = -20;                                                                                 // DBm máximos
-const int DBm_Minimo = -130;                                                                                // DBm mínimos
-const int Puntos_Calibracion = (((-DBm_Minimo) - (-DBm_Maximo)) / DB_Espaciado) + 1;                        // Cantidad de puntos de calibracion, de xdb en xdb
-Float TablaCalibracion[Puntos_Calibracion];
+int dBmHz_Maximo = 25;                                                                                      // dBm/Hz máximos por defecto en positivo, el valor real es negativo
+int dBmHz_Minimo = 136;                                                                                     // dBm/Hz mínimos por defecto en positivo, el valor real es negativo
+int Puntos_Calibracion = 30;                                                                                // Cantidad de puntos de calibracion
+int Puntos_Grabados = 0;
+bool Uncal = true;
+Float TablaCalibracion[31];
 
 float Cero;
 float Dato;
 unsigned int ValorNuevo = 0;                                                                                // Se va incrementando en 1 para tener constancia de la actualización del ADC.
 unsigned int ValorAnterior = 0;                                                                             // Se incremeenta manualmente para comprobar si el ADC se ha actualizado.
-float DBm;
+float dBmHz; 
 float DBrel;
 unsigned long TiempoPunta = 0;
 unsigned long TiempoPuntaPasado = 0;
@@ -78,6 +79,7 @@ bool Iniciar_Barra = true;
 unsigned long TiempoInicioMedia = 0;
 float Media = 0.0;
 int MediaCont = 0;
+bool Fin_Datos = false;
 unsigned int K1 = 20;
 unsigned int K2 = 40;
 unsigned int K3 = 80;
@@ -89,7 +91,7 @@ unsigned int Escala2 = 3;
 unsigned int Escala3 = 5;
 unsigned int Escala4 = 10;
 unsigned int Escala5 = 20;
-int Escala = 20;                                                                                            // Fondo de escala en db
+int Escala = Escala5;                                                                                       // Fondo de escala en db
 const float EscalaADC = 3.3 / 4096.0;
 float IncCero = (float)Escala / 127.0;
 bool Pulsador1_Ant = HIGH;
@@ -147,7 +149,7 @@ void setup()
   lcd.setCursor(22, 4);
   lcd.print("EA5IOT SUN NOISE METER");
   lcd.setCursor(32, 35);
-  lcd.print("VERSION 1.7");
+  lcd.print("VERSION 2.0");
   lcd.flush();                                                                                              // Se actualiza la pantalla para que aparezca el mensaje
   delay(5000);                                                                                              // Tiempo que aparece el mensaje en pantalla (5 segundos)
   lcd.clear();
@@ -156,7 +158,7 @@ void setup()
   for (int i = 0; i < 128; i++) Memoria[i] = 0;                                                             // Se inicializa el buffer de memoria del osciloscopio
   PintarEscala();
 
-  Cero = DBm = DBm_Minimo;
+  Cero = dBmHz = -dBmHz_Minimo;
   Dato = TablaCalibracion[0].Float;
   
   Timer4.resume();                                                                                          // Se activan las interrupciones de tiempo para llamar a la rutina de leervalor
@@ -168,7 +170,7 @@ void loop()
   
   if (BuscaCero)
   {
-    if (CalcularMedia(DBm, 50))
+    if (CalcularMedia(dBmHz, 50))
     {
       Cero = Media;
       BuscaCero = false;
@@ -181,13 +183,16 @@ void loop()
       CambioEscala = false;
     };
 
-  if ((Menu == 2) && (SubMenu == 1) && (SubMenu1 == true) && (Seleccion < Puntos_Calibracion))                       
+  if ((Menu == 2) && (SubMenu == 1) && (SubMenu1 == true) && (Seleccion <= Puntos_Calibracion))                       
   {
     if (CalcularMedia(Dato, 20))                                                                            // Se calcula la media de x valores del ADC
     {
-      TablaCalibracion[Seleccion].Float = Media;                                                            // Se almacena el valio medio del punto de calibracion.      
-      Seleccion++;                                                                                          // Avanzamos al siguiente punto de calibracion.
-      if (Seleccion < Puntos_Calibracion) SubMenu1 = false;                                                 // Si ya se han recogido los Puntos_Calibracion, dejamos el último mensaje en pantalla fijo.
+      TablaCalibracion[Seleccion].Float = Media;                                                            // Se almacena el valor medio del punto de calibracion.            
+      if (Seleccion < Puntos_Calibracion)
+      {
+        SubMenu1 = false;                                                                                   // Si ya se han recogido los Puntos_Calibracion, dejamos el último mensaje en pantalla fijo.
+        Seleccion++;                                                                                        // Avanzamos al siguiente punto de calibracion.
+      } else Fin_Datos = true;
     };
   };
 
@@ -198,71 +203,87 @@ void loop()
 
 void LeerValor(void)
 {
-  int c, d, ii;
+  int c = 0;
+  int ii = 0;
+  int db_1 = 0;
+  int db_2 = 0;
   float fx, dif, x, a0, a1, a2, a3, y0, y1, y2, y3, k;
 
   Dato += ((float)K*0.001)*((float)analogRead(ADC) - Dato);                                                 // Se filtra la lectura del ADC
-  if (Dato >= TablaCalibracion[Puntos_Calibracion - 1].Float) Dato = TablaCalibracion[Puntos_Calibracion - 1].Float;
-  ii = 0;
-  d = 0;
-  for (int i = 0; i < Puntos_Calibracion; i++)                                                              // Busqueda del indice para apuntar a los valores de calibración
+  if ((Puntos_Grabados == 0) || (Dato > TablaCalibracion[Puntos_Calibracion].Float))
   {
-    if (Dato >= TablaCalibracion[i].Float)
+    dBmHz = 0.029*Dato - 135.717;                                                                           // Si el dato del ADC está fuera de los puntos de calibración aplicamos una conversión lineal de Voltios a dB
+    Uncal = true;
+  } else
+  {
+    Uncal = false;
+    for (int i = 0; i <= Puntos_Calibracion; i++)                                                           // Busqueda del indice para apuntar a los valores de calibración
     {
-      ii = i;                                                                                               // Buscamos el valor mas cercano al dato leido según la tabla de calibración para aplicar los coeficientes mas cercanos de calibración
-      d = i;
+      if (Dato >= TablaCalibracion[i].Float)
+      {
+        ii = i;                                                                                             // Buscamos el valor mas cercano al dato leido según la tabla de calibración para aplicar los coeficientes mas cercanos de calibración
+        if (i < 14)
+        {
+          db_1 += 2;
+          db_2 = 2;
+        } else
+        {
+          db_1 += 5;
+          db_2 = 5;
+        };
+      };
     };
-  }; 
-  
-  if (ii < 1)
-  {
-    ii = 1;
-    y0 = TablaCalibracion[ii - 1].Float - 5.0; //(TablaCalibracion[ii].Float - TablaCalibracion[ii - 1].Float);
-    y1 = TablaCalibracion[ii - 1].Float;
-    y2 = TablaCalibracion[ii].Float;
-    y3 = TablaCalibracion[ii + 1].Float;
-  } else if (ii >= (Puntos_Calibracion - 2))
-  {
-    ii = Puntos_Calibracion - 2;
-    y0 = TablaCalibracion[ii - 1].Float;
-    y1 = TablaCalibracion[ii].Float;
-    y2 = TablaCalibracion[ii + 1].Float;
-    y3 = TablaCalibracion[ii + 1].Float + 7.0; //(TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);
-  } else 
-  {
-    y0 = TablaCalibracion[ii - 1].Float;
-    y1 = TablaCalibracion[ii].Float;
-    y2 = TablaCalibracion[ii + 1].Float;
-    y3 = TablaCalibracion[ii + 2].Float;    
+
+    if (ii == 0)
+    {
+      y0 = TablaCalibracion[ii].Float - 5.0;
+      y1 = TablaCalibracion[ii].Float;
+      y2 = TablaCalibracion[ii + 1].Float;
+      y3 = TablaCalibracion[ii + 2].Float;
+    } else if (ii >= (Puntos_Calibracion - 1))
+    {
+      ii = Puntos_Calibracion - 1;
+      y0 = TablaCalibracion[ii - 1].Float;
+      y1 = TablaCalibracion[ii].Float;
+      y2 = TablaCalibracion[ii + 1].Float;
+      y3 = TablaCalibracion[ii + 1].Float + 7.0;
+    } else 
+    {
+      y0 = TablaCalibracion[ii - 1].Float;
+      y1 = TablaCalibracion[ii].Float;
+      y2 = TablaCalibracion[ii + 1].Float;
+      y3 = TablaCalibracion[ii + 2].Float;    
+    };
+
+    Test1 = ii;                                                                                               // Debug
+    c = 0;                                                                                                    // Debug
+
+    a0 = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
+    a1 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+    a2 = -0.5 * y0 + 0.5 * y2;
+    a3 = y1;
+
+    x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
+    if (Dato < TablaCalibracion[2].Float) k = 0.01; else k = 0.004;
+ 
+    do
+    {
+      fx = (a0 * x * x * x) + (a1 * x * x) + (a2 * x) + a3;                                                   // fx(x1)
+      dif = fx - Dato;
+      x -= dif * k;
+      c++;                                                                                                    // Debug, contador de número de iteraciones
+    } while ((abs(dif) >= 0.05) && (c < 50));                                                                 // Se evalua la ecuación en x1
+
+    Test4 = c;
+    Test3 = fx;
+    dBmHz = -dBmHz_Minimo;
+    dBmHz += db_1;
+    dBmHz += db_2 * x;                                                                                        // Interpolamos la lectura del ADC y se convierte a dB/Hz
   };
   
-  Test1 = ii;                                                                                               // Debug
-  c = 0;                                                                                                    // Debug
-
-  a0 = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
-  a1 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-  a2 = -0.5 * y0 + 0.5 * y2;
-  a3 = y1;
-
-  x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
-  if (Dato < TablaCalibracion[2].Float) k = 0.02; else k = 0.004;
-  
-  do
-  {
-    fx = (a0 * x * x * x) + (a1 * x * x) + (a2 * x) + a3;                                                   // fx(x1)
-    dif = fx - Dato;
-    x -= dif * k;
-    c++;                                                                                                    // Debug, contador de número de iteraciones
-  } while ((abs(dif) >= 0.05) && (c < 50));                                                                 // Se evalua la ecuación en x1
-
-  Test4 = c;
-  Test3 = fx;
-  DBm = -130.0;
-  DBm += DB_Espaciado * d;
-  DBm += DB_Espaciado * x;                                                                                  // Interpolamos la lectura del ADC y se convierte a DBm 
-  if (DBm < DBm_Minimo) DBm = DBm_Minimo;
-  else if (DBm > DBm_Maximo) DBm = DBm_Maximo;
-  
+  if (dBmHz < -dBmHz_Minimo) dBmHz = -dBmHz_Minimo;
+  else if (dBmHz > -25.0) dBmHz = -25.0;
+      
   ValorNuevo++;                                                                                             // Unsigned int, de manera que va de 0 a 65535, para tener la indicacion de las actualizaciones del ADC.
 
   return;
@@ -274,7 +295,7 @@ void ActualizarPantalla(void)
   {
     int barra;
 
-    DBrel = DBm - Cero;
+    DBrel = dBmHz - Cero;
     barra = (int)(DBrel / (Escala / 127.0));                                                                // Se representa el valor en dB con el fondo de escala "Escala"
       
     if (barra < 0)
@@ -301,12 +322,8 @@ void ActualizarPantalla(void)
 }
 
 void CargarValoresEEprom(void)
-{
-  int poscero;
-
-  poscero = EEPROM.read(0);
-  
-  if ((poscero == 170) && (GrabarMemoria == false))                                                          // ¿Está inicializada la EEPROM?
+{  
+  if ((EEPROM.read(0) == 0xAA) && (GrabarMemoria == false))                                                 // ¿Está inicializada la EEPROM?
   {
     K1 = EEPROM.read(1); 
     K2 = EEPROM.read(2);   
@@ -319,12 +336,16 @@ void CargarValoresEEprom(void)
     Escala4 = EEPROM.read(9);   
     Escala5 = EEPROM.read(10);   
     Contraste = EEPROM.read(11);
-    
-    for (int i = 0; i < Puntos_Calibracion; i++)
+    dBmHz_Maximo = EEPROM.read(12);
+    dBmHz_Minimo = EEPROM.read(13);
+    Puntos_Grabados = EEPROM.read(14);
+    Puntos_Calibracion = Puntos_Grabados;
+
+    for (int i = 0; i <= Puntos_Calibracion; i++)
     {
       for (int ii = 0; ii < 4; ii++)
       {
-        TablaCalibracion[i].Byte[ii] = EEPROM.read(12 + (i * 4) + ii);       
+        TablaCalibracion[i].Byte[ii] = EEPROM.read(15 + ii + (i * 4));       
       };
     };
     Escala = Escala5;
@@ -333,28 +354,34 @@ void CargarValoresEEprom(void)
   {
     if (GrabarMemoria == false)
     {
-      for (int i = 0; i < Puntos_Calibracion; i++)                                                          // Inicialización de la tabla de calitración para medidores nuevos
+      for (int i = 0; i <= Puntos_Calibracion; i++)                                                         // Inicialización de la tabla de calitración para medidores nuevos
       {
-        TablaCalibracion[i].Float = (4096.0 / Puntos_Calibracion) * i + (4096.0 / Puntos_Calibracion);      // Se suma el menor valor, para que sirva de offset simulando la lectura mínima de ruido
+        TablaCalibracion[i].Float = 0.0;
       };
     } else Timer4.pause();
-    EEPROM.write(0, 170);                                                                                   // Grabamos el código de inicialización en la primera posición   
-    EEPROM.write(1, K1);  
-    EEPROM.write(2, K2);  
-    EEPROM.write(3, K3);   
-    EEPROM.write(4, K4);  
-    EEPROM.write(5, K5);  
-    EEPROM.write(6, Escala1);  
-    EEPROM.write(7, Escala2);   
-    EEPROM.write(8, Escala3);   
-    EEPROM.write(9, Escala4);   
-    EEPROM.write(10, Escala5); 
+
+    EEPROM.write(0, 0xAA);                                                                                  // Grabamos el código de inicialización en la primera posición   
+    EEPROM.write(1, K1);
+    EEPROM.write(2, K2);
+    EEPROM.write(3, K3);
+    EEPROM.write(4, K4);
+    EEPROM.write(5, K5);
+    EEPROM.write(6, Escala1);
+    EEPROM.write(7, Escala2);
+    EEPROM.write(8, Escala3);
+    EEPROM.write(9, Escala4);
+    EEPROM.write(10, Escala5);
     EEPROM.write(11, Contraste);
-    for (int i = 0; i < Puntos_Calibracion; i++)
+    EEPROM.write(12, (unsigned int)dBmHz_Maximo);
+    EEPROM.write(13, (unsigned int)dBmHz_Minimo);
+    EEPROM.write(14, Puntos_Grabados);
+    Puntos_Calibracion = Puntos_Grabados;
+
+    for (int i = 0; i <= Puntos_Calibracion; i++)
     {
       for (int ii = 0; ii < 4; ii++)
       {
-        EEPROM.write(12 + (i * 4) + ii, TablaCalibracion[i].Byte[ii]);
+        EEPROM.write(15 + ii + (i * 4), TablaCalibracion[i].Byte[ii]);
       };
     };
     if (GrabarMemoria == true)
@@ -371,8 +398,8 @@ bool CalcularMedia(float dato, unsigned int cantidadValores)                    
 {
   if (InicioMedia == false)
   {
-    TiempoInicioMedia = millis();
     InicioMedia = true;
+    TiempoInicioMedia = millis();    
     Media = 0.0;
     MediaCont = 0;
   } else if ((millis() - TiempoInicioMedia) > 200)                                                          // Esperamos x milisegunos para comenzar a buscar el cero para que los pulsadores se estabilicen y no distorsionen la señal
@@ -401,7 +428,7 @@ void IniciarContadores(void)
   Timer4.setPeriod(20000);                                                                                  // Se llama a la rutina de la interrupción cada 20000 microsegundos = 50 veces por segundo
   Timer4.setCompare1(1);
   Timer4.attachCompare1Interrupt(LeerValor);
-  //Timer4.resume();
+  //Timer4.resume();                                                                                        // Se activa al final del setup()
 
   TIMER1->regs.gen->CR1 = 0x0000;                                                                           // Se deshabilita el contador
   TIMER1->regs.gen->PSC = 0x0000;                                                                           // Hay que poner un cero en el preescaler del TIMER1 para que cuente a 72Mhz, porque las librerias lo arrancan a 2 (36 Mhz)
@@ -449,9 +476,30 @@ void LeerPulsadores(void)
       TiempoInicioRepeticionPulsacion = 1000;                                                               // Para activar la repeticion de las teclas en los menus de medida
       SubMenu1 = false;
 
-      if ((SubMenu == 1) && (Seleccion == Puntos_Calibracion))                                              // Al salir del menu de calibracion de db grabamos los datos a la eeprom si se han completado todos los puntos de calibracion
+      if (SubMenu == 1)                                                                                     // Al salir del menu de calibracion de db grabamos los datos a la eeprom si se han completado todos los puntos de calibración
       {
-        GrabarMemoria = true;
+        if (Puntos_Calibracion == Seleccion)
+        {
+          Fin_Datos = false;
+          GrabarMemoria = true;
+          Puntos_Grabados = Puntos_Calibracion;
+
+          dBmHz_Maximo = dBmHz_Minimo;
+          for (int i=0; i < Puntos_Calibracion; i++)
+          {
+            if (i < 14)
+            {
+              dBmHz_Maximo -= 2;
+            } else
+            {
+              dBmHz_Maximo -= 5;
+            };
+          };
+        } else
+        {
+          GrabarMemoria = false;
+          CargarValoresEEprom();                                                                            // Se reestablecen los valores anteriores, ya que se ha abortado la calibración
+        };
       } else if (SubMenu == 2)                                                                              // Al salir del menu de ajuste de contraste grabamos el contraste en la eeprom.
         {
           GrabarMemoria = true;
@@ -504,13 +552,13 @@ void LeerPulsadores(void)
         };
         if ((millis() - TiempoPulsador2) > TiempoRepeticionPulsacion)
         {
-          Pulsadores_Subir(Menu);                                                                                      // Acción de aumentar, dependendiendo del menú ser hará una cosa u otra.
+          Pulsadores_Subir(Menu);                                                                           // Acción de aumentar, dependendiendo del menú ser hará una cosa u otra.
           Pulsador2Repeticion = false;
         };
       };
     } else if ((pulsador2 == HIGH) && (Pulsador2_Ant == LOW))                                               // ¿Se acaba de soltar el boton?
     {
-      Pulsadores_Subir(Menu);                                                                                          // Acción de aumentar, dependendiendo del menú se hará una cosa u otra.
+      Pulsadores_Subir(Menu);                                                                               // Acción de aumentar, dependendiendo del menú se hará una cosa u otra.
       Pulsador2 = false;
       Pulsador2Repeticion = false;
     };
@@ -537,13 +585,13 @@ void LeerPulsadores(void)
         };
         if ((millis() - TiempoPulsador3) > TiempoRepeticionPulsacion)
         {
-          Pulsadores_Bajar(Menu);                                                                                      // Acción de disminuir, dependendiendo del menú se hará una cosa u otra.
+          Pulsadores_Bajar(Menu);                                                                           // Acción de disminuir, dependendiendo del menú se hará una cosa u otra.
           Pulsador3Repeticion = false;
         };
       };
     } else if ((pulsador3 == HIGH) && (Pulsador3_Ant == LOW))                                               // ¿Se acaba de soltar el boton?
     {
-      Pulsadores_Bajar(Menu);                                                                                          // Acción de disminuir, dependendiendo del menú se hará una cosa u otra.
+      Pulsadores_Bajar(Menu);                                                                               // Acción de disminuir, dependendiendo del menú se hará una cosa u otra.
       Pulsador3 = false;
       Pulsador3Repeticion = false;
     };
@@ -559,7 +607,7 @@ void LeerPulsadores(void)
     };
   } else if ((pulsador4 == HIGH) && (Pulsador4_Ant == LOW))                                                 // ¿Se acaba de soltar el boton?
   {
-    Pulsadores_Seleccionar(Menu);                                                                                      // Acción de seleccionar, dependendiendo del menú se hará una cosa u otra.
+    Pulsadores_Seleccionar(Menu);                                                                           // Acción de seleccionar, dependendiendo del menú se hará una cosa u otra.
     Pulsador4 = false;
   };
 
@@ -689,9 +737,16 @@ void PintarMemoriaOsciloscopio(int valor)
     lcd.setCursor(Y1, 0);
     lcd.print(DBrel, 2);
     lcd.print("dB");
-    lcd.setCursor(Y1, 55);
-    lcd.print(DBm, 2);
-    lcd.print("dBm");
+    lcd.setCursor(Y1, 46);
+    if (Uncal == false)
+    {
+      lcd.print(dBmHz, 1);
+      lcd.print("dBm/Hz");
+    } else
+    {
+      lcd.print("UNCAL");
+      lcd.print(Dato);
+    };
 
     for (int i = 127; i > 0; i--)
     {
@@ -713,12 +768,20 @@ void PintarMemoriaOsciloscopio(int valor)
     {
       lcd.fillbox(0, Y1 + 10, 128, 33, PixelClear);
       lcd.setCursor(Y1 + 9, 0);
+      lcd.print(Puntos_Grabados);
+      lcd.print(" ");
+      lcd.print(Puntos_Calibracion);
+      lcd.print(" ");
       lcd.print(Dato, 2);
       lcd.setCursor(Y1 + 18, 0);
+      lcd.print(dBmHz_Maximo);
+      lcd.print(" ");
       lcd.print(Test1);
       lcd.print(">");
       lcd.print(TablaCalibracion[Test1].Float, 2);
       lcd.setCursor(Y1 + 27, 0);
+      lcd.print(dBmHz_Minimo);
+      lcd.print(" ");      
       lcd.print(Test2);
       lcd.print(">");
       lcd.print(TablaCalibracion[Test2].Float, 2);
@@ -792,27 +855,27 @@ void PintarMenu(void)
         case 0:                
           lcd.fillbox(0, 12, 128, 9, PixelSet);
           lcd.textInvert(true);
-          lcd.setCursor(13, 20);          
-          lcd.print("DBM READINGS CAL.");
+          lcd.setCursor(13, 15);
+          lcd.print("dBm/Hz READINGS CAL.");
           lcd.textInvert(false);
 
           lcd.fillbox(0, 22, 128, 9, PixelClear);
-          lcd.setCursor(23, 20);          
+          lcd.setCursor(23, 20);
           lcd.print("SCREEN CONSTRAST");
 
           lcd.fillbox(0, 32, 128, 9, PixelClear);
-          lcd.setCursor(33, 10);          
+          lcd.setCursor(33, 10);
           lcd.print("SIGNAL FILTER ADJUST");
 
           lcd.fillbox(0, 42, 128, 9, PixelClear);
-          lcd.setCursor(43, 30);          
+          lcd.setCursor(43, 30);
           lcd.print("METER SCALES");
         break;
-                
-        case 1:       
+
+        case 1:
           lcd.fillbox(0, 12, 128, 9, PixelClear);
-          lcd.setCursor(13, 20);          
-          lcd.print("DBM READINGS CAL.");
+          lcd.setCursor(13, 15);
+          lcd.print("dBm/Hz READINGS CAL.");
 
           lcd.fillbox(0, 22, 128, 9, PixelSet);
           lcd.textInvert(true);          
@@ -831,8 +894,8 @@ void PintarMenu(void)
 
         case 2:
           lcd.fillbox(0, 12, 128, 9, PixelClear);
-          lcd.setCursor(13, 20);          
-          lcd.print("DBM READINGS CAL.");
+          lcd.setCursor(13, 15);
+          lcd.print("dBm/Hz READINGS CAL.");
 
           lcd.fillbox(0, 22, 128, 9, PixelClear);
           lcd.setCursor(23, 20);          
@@ -851,8 +914,8 @@ void PintarMenu(void)
 
         case 3:
           lcd.fillbox(0, 12, 128, 9, PixelClear);
-          lcd.setCursor(13, 20);          
-          lcd.print("DBM READINGS CAL.");
+          lcd.setCursor(13, 15);
+          lcd.print("dBm/Hz READINGS CAL.");
 
           lcd.fillbox(0, 22, 128, 9, PixelClear);
           lcd.setCursor(23, 20);          
@@ -879,47 +942,56 @@ void PintarMenu(void)
       {
         lcd.setCursor(1, 0);
         lcd.textInvert(true);
-        if (Seleccion < Puntos_Calibracion)
+        if ((Seleccion < Puntos_Calibracion) || (Fin_Datos == false))
         {
           lcd.box(0, 0, 128, 8, PixelSet);
           lcd.print("                 WAIT                   ");
         } else
         {
+          lcd.fillbox(0, 0, 128, 64, PixelClear);          
           lcd.box(0, 0, 128, 8, PixelSet);
-          lcd.print("        ALL DATA SAVED           ");
+          lcd.print("        PRESS MENU FOR         ");
+          lcd.box(0, 9, 128, 8, PixelSet);
+          lcd.setCursor(10, 0);
+          lcd.print("     SAVE DATA AND EXIT        ");
         };
-        lcd.textInvert(false);        
+        lcd.textInvert(false);
       } else
       {
+        int d = 0;
+        for (int i=0; i < Seleccion; i++)
+        {
+          if (i < 13) d += 2;
+          else d += 5;
+        };
         lcd.box(0, 0, 128, 8, PixelClear);
         lcd.setCursor(1, 0);      
-        lcd.print("APPLY ");
-        lcd.print((Seleccion * DB_Espaciado) + DBm_Minimo);
-        lcd.print(" dBm ON RF SMA              ");        
-      };
+        lcd.print("APPLY -");
+        lcd.print(dBmHz_Minimo - d);
+        lcd.print(" dBm/Hz ON SMA     ");
+        lcd.setCursor(13, 0);
+        lcd.print("WAIT FOR ADC READINGS");
+        lcd.setCursor(21, 0);
+        lcd.print("TO STABILIZE");
+        lcd.setCursor(30, 0);
 
-      lcd.setCursor(15, 0);
-      lcd.print("CHANGE FREQUENCY FOR");
-      lcd.setCursor(25, 0);
-      lcd.print("MAXIMUN ADC READING");
-      lcd.setCursor(40, 0);
-      
-      if (Seleccion < Puntos_Calibracion)
-      {
-        lcd.print("ADC READING:");
-        lcd.setCursor(40, 70);
-        lcd.print(Seleccion);
-        lcd.print(" > ");
-        lcd.print(Dato, 2);
-        delay(100);                                                                                         // Este delay es necesario para que las indicaciones de la variable Dato sean iguales aquí y en la pantalla principal, ¿PORQUE?
-        lcd.print("    ");
-        lcd.setCursor(50, 0);
-        lcd.print("PRESS SELECT WHEN DONE");
-      } else
-      {
-        lcd.fillbox(0, 10, 128, 50, PixelClear);
-        lcd.setCursor(50,0);
-        lcd.print("PRESS MENU                   ");
+        if (Seleccion <= Puntos_Calibracion)
+        {
+          lcd.print("ADC:");
+          lcd.setCursor(30, 40);
+          lcd.print(Seleccion);
+          lcd.print(" > ");
+          lcd.print(Dato, 2);
+          delay(100);                                                                                       // Este delay es necesario para que las indicaciones de la variable Dato sean iguales aquí y en la pantalla principal, ¿PORQUE?
+          lcd.print("    ");
+          if (Seleccion >= 3)
+          {
+            lcd.setCursor(42, 0);
+            lcd.print("PRESS UP TO FINISH");
+          };
+          lcd.setCursor(50, 0);
+          lcd.print("PRESS SELECT FOR NEXT");
+        };
       };
     break;
 
@@ -1546,6 +1618,11 @@ void Pulsadores_Subir(int menu)
         break;
 
         case 1:                                                                                             // calibrar sensor
+          if (Seleccion >= 3)                                                                               // Puntos mínimos de calibración para que el algoritmo de calibración funcione bien
+          {
+            Puntos_Calibracion = Seleccion;
+            SubMenu1 = true;
+          };
         break;
 
         case 2:                                                                                             // contraste pantalla
@@ -1659,7 +1736,7 @@ void Pulsadores_Seleccionar(int menu)
       if (Debug)
       {
         Test2++;
-        if (Test2 > (Puntos_Calibracion - 1)) Test2 = 0;
+        if (Test2 > Puntos_Calibracion) Test2 = 0;
       };      
     break;
 
@@ -1678,23 +1755,33 @@ void Pulsadores_Seleccionar(int menu)
       switch (SubMenu)
       {
         case 0:                                                                                             // Menu Principal
-          SubMenu = Seleccion + 1;                                                                          // Se selecciona el siguiente Menu, 1 = dbm cal, 2 = contraste, 3 = filtro de señal, 4 = fondo de escala.
+          SubMenu = Seleccion + 1;                                                                          // Se selecciona el siguiente Menu, 1 = dB/Hz cal, 2 = contraste, 3 = filtro de señal, 4 = fondo de escala.
           BorrarPantalla = true;
-          
-          Seleccion = 0;                                                                                    // Nuevo SubMenu = 1, Seleccion apunta al primer dato del menu de calibracion.
-          SubMenu1 = false;                                                                                 // Nuevo SubMenu = 1, Se prepara la variable SubMenu1 para ir cambiando de punto de calibración.
-          if (SubMenu == 2)                                                                                 // Nuevo SubMenu = 2
+
+          if (SubMenu == 1)
           {
-            TiempoInicioRepeticionPulsacion = 1000;                                                         // Se activa la repetición de los pulsadores para ajustar el contraste mas comodamente.
-            Seleccion = Contraste;                                                                          // Ponemos el PWM al valor grabado en le EEPROM
-          };
-          if ((SubMenu == 3) || (SubMenu == 4))                                                             // Nuevo SubMenu = 3 o 4
-          {
-            Escala = 1;                                                                                     // Inicializamos Escala para que coincida con la primera indicación en pantalla
-          };
+            Seleccion = 0;                                                                                  // Nuevo SubMenu = 1, Seleccion apunta al primer dato del menu de calibracion.
+            SubMenu1 = false;                                                                               // Nuevo SubMenu = 1, Se prepara la variable SubMenu1 para ir cambiando de punto de calibración.
+            dBmHz_Maximo = 25;
+            dBmHz_Minimo = 136;
+            Puntos_Calibracion = 30;                                                                        // Cantidad de puntos de calibracion
+            for (int i = 0; i <= Puntos_Calibracion; i++)                                                   // Inicialización de la tabla de calitración para medidores nuevos
+            {
+              TablaCalibracion[i].Float = 0.0;
+            };
+          } else
+            if (SubMenu == 2)                                                                               // Nuevo SubMenu = 2
+            {
+              TiempoInicioRepeticionPulsacion = 1000;                                                       // Se activa la repetición de los pulsadores para ajustar el contraste mas comodamente.
+              Seleccion = Contraste;                                                                        // Ponemos el PWM al valor grabado en le EEPROM
+            } else
+              if ((SubMenu == 3) || (SubMenu == 4))                                                         // Nuevo SubMenu = 3 o 4
+              {
+                Escala = 1;                                                                                 // Inicializamos Escala para que coincida con la primera indicación en pantalla
+              };
         break;
 
-        case 1:                                                                                             // Calibracion lecturas db.
+        case 1:                                                                                             // Calibracion lecturas dB/Hz.
           SubMenu1 = true;
         break;
 
