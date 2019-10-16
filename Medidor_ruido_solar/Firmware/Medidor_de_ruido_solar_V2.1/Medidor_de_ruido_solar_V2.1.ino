@@ -1,4 +1,4 @@
-/*  EA5IOT Medidor de rudio solar V2.0
+/*  EA5IOT Medidor de rudio solar V2.1
     Copyright (C) 2019  EA5IOT
 
     This program is free software: you can redistribute it and/or modify
@@ -86,6 +86,7 @@ unsigned int K3 = 80;
 unsigned int K4 = 160;
 unsigned int K5 = 320;
 unsigned int K = K5;                                                                                        // Ganancia filtro señal
+unsigned int K_Ant = K;
 unsigned int Escala1 = 1;
 unsigned int Escala2 = 3;
 unsigned int Escala3 = 5;
@@ -149,7 +150,7 @@ void setup()
   lcd.setCursor(22, 4);
   lcd.print("EA5IOT SUN NOISE METER");
   lcd.setCursor(32, 35);
-  lcd.print("VERSION 2.0");
+  lcd.print("VERSION 2.1");
   lcd.flush();                                                                                              // Se actualiza la pantalla para que aparezca el mensaje
   delay(5000);                                                                                              // Tiempo que aparece el mensaje en pantalla (5 segundos)
   lcd.clear();
@@ -222,7 +223,7 @@ void LeerValor(void)
       if (Dato >= TablaCalibracion[i].Float)
       {
         ii = i;                                                                                             // Buscamos el valor mas cercano al dato leido según la tabla de calibración para aplicar los coeficientes mas cercanos de calibración
-        if (i < 14)
+        if (i <= 13)
         {
           db_1 += 2;
           db_2 = 2;
@@ -234,25 +235,48 @@ void LeerValor(void)
       };
     };
 
+    if (Dato < TablaCalibracion[0].Float) Dato = TablaCalibracion[0].Float;
     if (ii == 0)
     {
       y0 = TablaCalibracion[ii].Float - 5.0;
       y1 = TablaCalibracion[ii].Float;
       y2 = TablaCalibracion[ii + 1].Float;
       y3 = TablaCalibracion[ii + 2].Float;
+      x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
     } else if (ii >= (Puntos_Calibracion - 1))
     {
       ii = Puntos_Calibracion - 1;
       y0 = TablaCalibracion[ii - 1].Float;
       y1 = TablaCalibracion[ii].Float;
       y2 = TablaCalibracion[ii + 1].Float;
-      y3 = TablaCalibracion[ii + 1].Float + 7.0;
+      y3 = TablaCalibracion[ii + 1].Float + 5.0;
+      x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
     } else 
     {
-      y0 = TablaCalibracion[ii - 1].Float;
-      y1 = TablaCalibracion[ii].Float;
-      y2 = TablaCalibracion[ii + 1].Float;
-      y3 = TablaCalibracion[ii + 2].Float;    
+      if ((ii <= 11) || (ii > 13))
+      {
+        y0 = TablaCalibracion[ii - 1].Float;
+        y1 = TablaCalibracion[ii].Float;
+        y2 = TablaCalibracion[ii + 1].Float;
+        y3 = TablaCalibracion[ii + 2].Float;
+        x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
+      } else if (ii == 12)
+        {
+          y0 = TablaCalibracion[ii - 2].Float;
+          y1 = TablaCalibracion[ii - 1].Float;
+          y2 = TablaCalibracion[ii].Float;
+          y3 = TablaCalibracion[ii + 1].Float;
+          db_1 -= 2;
+          x = (Dato - TablaCalibracion[ii - 1].Float) / (TablaCalibracion[ii].Float - TablaCalibracion[ii - 1].Float);  // Se aproxima el valor inicial de x0
+        } else if (ii == 13)
+          {
+            y0 = TablaCalibracion[ii - 2].Float;
+            y1 = TablaCalibracion[ii].Float;
+            y2 = TablaCalibracion[ii + 1].Float;
+            y3 = TablaCalibracion[ii + 2].Float;
+            db_2 = 5;
+            x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
+          };
     };
 
     Test1 = ii;                                                                                               // Debug
@@ -263,22 +287,21 @@ void LeerValor(void)
     a2 = -0.5 * y0 + 0.5 * y2;
     a3 = y1;
 
-    x = (Dato - TablaCalibracion[ii].Float) / (TablaCalibracion[ii + 1].Float - TablaCalibracion[ii].Float);  // Se aproxima el valor inicial de x0
-    if (Dato < TablaCalibracion[2].Float) k = 0.01; else k = 0.004;
+    k = 0.005;
  
     do
     {
-      fx = (a0 * x * x * x) + (a1 * x * x) + (a2 * x) + a3;                                                   // fx(x1)
+      fx = (a0 * x * x * x) + (a1 * x * x) + (a2 * x) + a3;                                                 // fx(x1)
       dif = fx - Dato;
       x -= dif * k;
-      c++;                                                                                                    // Debug, contador de número de iteraciones
-    } while ((abs(dif) >= 0.05) && (c < 50));                                                                 // Se evalua la ecuación en x1
+      c++;                                                                                                  // Debug, contador de número de iteraciones
+    } while ((abs(dif) >= 0.05) && (c < 50));                                                               // Se evalua la ecuación en x1
 
     Test4 = c;
     Test3 = fx;
     dBmHz = -dBmHz_Minimo;
     dBmHz += db_1;
-    dBmHz += db_2 * x;                                                                                        // Interpolamos la lectura del ADC y se convierte a dB/Hz
+    dBmHz += db_2 * x;                                                                                      // Interpolamos la lectura del ADC y se convierte a dB/Hz
   };
   
   if (dBmHz < -dBmHz_Minimo) dBmHz = -dBmHz_Minimo;
@@ -507,6 +530,7 @@ void LeerPulsadores(void)
           {
             Escala = Escala5;
             K = K5;
+            K_Ant = K;
             CambioEscala = true;
             GrabarMemoria = true;
           };
@@ -529,6 +553,7 @@ void LeerPulsadores(void)
     Pulsador1 = false;                                                                                      // Ya puede pulsarse por primera vez el botón de nuevo.
     //CambioEscala = true;
     Iniciar_Barra = true;
+    K = K_Ant;
   };
 
   pulsador2 = digitalRead(Boton2);                                                                          // pulsador2 = Subir
@@ -1769,6 +1794,8 @@ void Pulsadores_Seleccionar(int menu)
             {
               TablaCalibracion[i].Float = 0.0;
             };
+            K_Ant = K;
+            K = 10;
           } else
             if (SubMenu == 2)                                                                               // Nuevo SubMenu = 2
             {
